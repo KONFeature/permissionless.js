@@ -26,7 +26,7 @@ import {
     zeroAddress
 } from "viem"
 import { privateKeyToAccount } from "viem/accounts"
-import { goerli } from "viem/chains"
+import { polygon } from "viem/chains"
 import { PartialBy } from "viem/types/utils"
 import { EntryPointAbi } from "./abis/EntryPoint"
 import { SimpleAccountAbi } from "./abis/SimpleAccount"
@@ -48,12 +48,12 @@ if (!process.env.RPC_URL) throw new Error("RPC_URL environment variable not set"
 const pimlicoApiKey = process.env.PIMLICO_API_KEY
 const entryPoint: Address = process.env.ENTRYPOINT_ADDRESS as Address
 
-const chain = "goerli"
+const chain = "polygon"
 const account = privateKeyToAccount(process.env.TEST_PRIVATE_KEY as Hex)
 const factoryAddress = "0x9406Cc6185a346906296840746125a0E44976454" as Address
 
 const publicClient = createPublicClient({
-    chain: goerli,
+    chain: polygon,
     transport: http(process.env.RPC_URL as string)
 })
 
@@ -91,7 +91,9 @@ const getInitCode = async (factoryAddress: Address, owner: WalletClient) => {
     const accountAddress = await getAccountAddress(factoryAddress, owner)
     if (!accountAddress) throw new Error("Account address not found")
 
-    if (await isAccountDeployed(accountAddress)) return "0x"
+    const isDeployed = await isAccountDeployed(accountAddress)
+
+    if (isDeployed) return "0x"
 
     return getAccountInitCode(factoryAddress, owner)
 }
@@ -126,7 +128,7 @@ const testSupportedEntryPoints = async (bundlerClient: BundlerClient) => {
 const testChainId = async (bundlerClient: BundlerClient) => {
     const chainId = await bundlerClient.chainId()
 
-    if (chainId !== goerli.id) throw new Error("Chain ID not supported")
+    if (chainId !== polygon.id) throw new Error("Chain ID not supported")
 }
 
 const buildUserOp = async (eoaWalletClient: WalletClient) => {
@@ -170,7 +172,7 @@ const testBundlerActions = async (bundlerClient: BundlerClient) => {
 
     const eoaWalletClient = createWalletClient({
         account,
-        chain: goerli,
+        chain: polygon,
         transport: http(process.env.RPC_URL as string)
     })
 
@@ -206,7 +208,7 @@ const testBundlerActions = async (bundlerClient: BundlerClient) => {
         ...userOperation,
         signature: await eoaWalletClient.signMessage({
             account: eoaWalletClient.account,
-            message: { raw: getUserOperationHash({ userOperation, entryPoint, chainId: goerli.id }) }
+            message: { raw: getUserOperationHash({ userOperation, entryPoint, chainId: polygon.id }) }
         })
     }
 
@@ -217,7 +219,7 @@ const testBundlerActions = async (bundlerClient: BundlerClient) => {
 
     console.log("userOpHash", userOpHash)
 
-    const userOpHashOld = "0xe9fad2cd67f9ca1d0b7a6513b2a42066784c8df938518da2b51bb8cc9a89ea34"
+    const userOpHashOld = "0x4c51c2e94893db975e1147a70734914cfccdefd71be05476c18f4664a9d16c52"
 
     const userOperationFromUserOpHash = await bundlerClient.getUserOperationByHash({ hash: userOpHashOld })
 
@@ -233,7 +235,7 @@ const getUserOperationGasPriceFromPimlicoBundler = async (pimlicoBundlerClient: 
 }
 
 const testFetchUserOperationStatus = async (pimlicoBundlerClient: PimlicoBundlerClient) => {
-    const userOpHashOld = "0xe9fad2cd67f9ca1d0b7a6513b2a42066784c8df938518da2b51bb8cc9a89ea34"
+    const userOpHashOld = "0x4c51c2e94893db975e1147a70734914cfccdefd71be05476c18f4664a9d16c52"
 
     const userOperationStatus = await pimlicoBundlerClient.getUserOperationStatus({
         hash: userOpHashOld
@@ -252,12 +254,15 @@ const testPimlicoBundlerActions = async (pimlicoBundlerClient: PimlicoBundlerCli
     testFetchUserOperationStatus(pimlicoBundlerClient)
 }
 
-const testPimlicoPaymasterActions = async (pimlicoPaymasterClient: PimlicoPaymasterClient) => {
+const testPimlicoPaymasterActions = async (
+    pimlicoPaymasterClient: PimlicoPaymasterClient,
+    bundlerClient: BundlerClient
+) => {
     console.log("======= TESTING PIMLICO PAYMASTER ACTIONS =======")
 
     const eoaWalletClient = createWalletClient({
         account,
-        chain: goerli,
+        chain: polygon,
         transport: http(process.env.RPC_URL as string)
     })
 
@@ -278,27 +283,54 @@ const testPimlicoPaymasterActions = async (pimlicoPaymasterClient: PimlicoPaymas
         entryPoint: entryPoint as Address
     })
     console.log("sponsorUserOperationPaymasterAndData", sponsorUserOperationPaymasterAndData)
+
+    userOperation.paymasterAndData = sponsorUserOperationPaymasterAndData.paymasterAndData
+    userOperation.callGasLimit = sponsorUserOperationPaymasterAndData.callGasLimit
+    userOperation.verificationGasLimit = sponsorUserOperationPaymasterAndData.verificationGasLimit
+    userOperation.preVerificationGas = sponsorUserOperationPaymasterAndData.preVerificationGas
+
+    console.log(userOperation, "============= USER OPERATION =============")
+
+    const userOperationHash = getUserOperationHash({ userOperation, entryPoint, chainId: polygon.id })
+
+    console.log(userOperationHash, "============= USER OPERATION HASH =============")
+
+    const signedUserOperation: UserOperation = {
+        ...userOperation,
+        signature: await eoaWalletClient.signMessage({
+            account: eoaWalletClient.account,
+            message: { raw: userOperationHash }
+        })
+    }
+    console.log(signedUserOperation, "============= SIGNED USER OPERATION HASH =============")
+
+    const userOpHash = await bundlerClient.sendUserOperation({
+        userOperation: signedUserOperation,
+        entryPoint: entryPoint as Address
+    })
+
+    console.log("userOpHash", userOpHash)
 }
 
 const main = async () => {
     const bundlerClient = createBundlerClient({
-        chain: goerli,
-        transport: http(`https://api.pimlico.io/v1/${chain}/rpc?apikey=${pimlicoApiKey}`)
+        chain: polygon,
+        transport: http(`http://0.0.0.0:8080/v1/${chain}/rpc?apikey=${pimlicoApiKey}`)
     })
 
-    await testBundlerActions(bundlerClient)
+    // await testBundlerActions(bundlerClient)
 
-    const pimlicoBundlerClient = createPimlicoBundlerClient({
-        chain: goerli,
-        transport: http(`https://api.pimlico.io/v1/${chain}/rpc?apikey=${pimlicoApiKey}`)
-    })
-    await testPimlicoBundlerActions(pimlicoBundlerClient)
+    // const pimlicoBundlerClient = createPimlicoBundlerClient({
+    //     chain: polygon,
+    //     transport: http(`http://0.0.0.0:8080/v1/${chain}/rpc?apikey=${pimlicoApiKey}`)
+    // })
+    // await testPimlicoBundlerActions(pimlicoBundlerClient)
 
     const pimlicoPaymasterClient = createPimlicoPaymasterClient({
-        chain: goerli,
-        transport: http(`https://api.pimlico.io/v2/${chain}/rpc?apikey=${pimlicoApiKey}`)
+        chain: polygon,
+        transport: http(`http://0.0.0.0:8080/v2/${chain}/rpc?apikey=${pimlicoApiKey}`)
     })
-    await testPimlicoPaymasterActions(pimlicoPaymasterClient)
+    await testPimlicoPaymasterActions(pimlicoPaymasterClient, bundlerClient)
 }
 
 main()

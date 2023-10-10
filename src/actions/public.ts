@@ -132,6 +132,7 @@ export const getSenderAddress = async (
  */
 export const getAccountNonce = async (
     publicClient: PublicClient,
+
     { address, entryPoint, key = 0n }: GetAccountNonceParams
 ): Promise<bigint> => {
     return await publicClient.readContract({
